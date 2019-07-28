@@ -1,0 +1,150 @@
+/*
+   Simple RFID reader
+   Written by W. Hoogervorst
+   july 2019
+   Based ons examples
+   -  MFRC522 ReadNUID example
+   -  U8x8lib example
+   Using an Arduino pro mini 3.3V 328P
+   
+   pin layout used for MFRC522:
+   --------------------------
+               MFRC522      Arduino
+               Reader/PCD   Uno/101
+   Signal      Pin          Pin
+   ---------------------------------
+   RST/Reset   RST          9
+   SPI SS      SDA(SS)      10
+   SPI MOSI    MOSI         11 / ICSP-4
+   SPI MISO    MISO         12 / ICSP-1
+   SPI SCK     SCK          13 / ICSP-3
+*/
+#include <SPI.h>
+#include <MFRC522.h>
+
+#include <U8x8lib.h>
+U8X8_SH1106_128X64_NONAME_4W_HW_SPI u8x8(/* cs=*/ 8, /* dc=*/ 7, /* reset=*/ 9);
+
+#define SCREENDELAY 10000 // 10 s
+
+#define SS_PIN 10
+#define RST_PIN 9
+
+#define line1 0
+#define line2 4
+
+String UID_Str; // String for publishing the as a string
+
+MFRC522 rfid(SS_PIN, RST_PIN); // Instance of the class
+
+// Init array that will store new NUID
+byte uidPICC[4];
+
+long lastupdate = 0;
+boolean updatescreen = true;
+
+void setup() {
+  Serial.begin(9600);
+  pinMode(3, INPUT);
+  pinMode(4, INPUT);
+  delay(200);
+  SPI.begin(); // Init SPI bus
+
+  // Initialize, optionally clear the screen
+  u8x8.begin();
+  u8x8.setPowerSave(0);
+  //u8x8.setFont(u8x8_font_profont29_2x3_f);
+  //u8x8.setFont(u8x8_font_courB18_2x3_f);
+  u8x8.setFont(u8x8_font_inb21_2x4_f );
+  u8x8.clear();
+  rfid.PCD_Init(); // Init MFRC522
+
+  // 3.6 - 4.2 is 0 % - 100 % battery power
+  // A0 can read 0 - 3.3V as 0 - 1023, battery voltage is max 4.2V, so use a voltage divider.
+  // using voltage divider of 19.8K and 10K, a voltage 3.3V at the analog pin refers to 4.96V, so 4.96 V at the input of the voltage divider results in a reading of 1023
+  float voltage;
+  for (int i = 0; i < 10; i++) //take 10 measurements
+    voltage += map(analogRead(A0), 0, 1023, 0, 496); // analog value 0 - 1023 and map to 496 (4.96V * 100) 
+  voltage = voltage / (float)1000;      // divide by 100 for converting to value to a float with 2 digits, divide by 10 for averaging measurements
+  Serial.println(voltage, 2);
+  int percentage;
+  if (voltage < 3.6) // voltage to low, prevent negative percentages when using map function
+    percentage = 2;
+  else if (voltage > 4.2) // voltage to high, prevent percentages > 100% (like 101% or 102%)
+    percentage = 100;
+  else
+    percentage = map(voltage * 100, 360, 420, 20, 100); // 3.6 - 4.2 is 0 % - 100 %
+  Serial.println(percentage);
+  String Perc_s = String(percentage);
+  Perc_s += " %";
+  char buf[5];
+  Perc_s.toCharArray(buf, Perc_s.length() + 1);
+
+  u8x8.clear();
+  u8x8.drawString(1, line1, "Battery");
+  u8x8.drawString(4, line2, buf);
+  delay(2000);
+
+  u8x8.clear();
+  u8x8.drawString(4, line1, "Scan");
+  u8x8.drawString(1, line2, "Pas/Tag");
+  updatescreen = false;
+  Serial.println(F("Setup ended"));
+}
+
+void loop() {
+  if (millis() - lastupdate > SCREENDELAY && updatescreen == true)
+  {
+    u8x8.clear();
+    u8x8.drawString(4, line1, "Scan");
+    u8x8.drawString(1, line2, "Pas/Tag");
+    lastupdate = millis();
+    updatescreen = false;
+  }
+  // Look for new cards
+  if ( ! rfid.PICC_IsNewCardPresent())
+    return;  // stop loop
+
+  // Verify if the UID has been readed
+  if ( ! rfid.PICC_ReadCardSerial())
+    return;  // stop loop
+
+  // Store NUID into nuidPICC array
+  for (byte i = 0; i < 4; i++) {
+    uidPICC[i] = rfid.uid.uidByte[i];
+  }
+  // Halt PICC
+  rfid.PICC_HaltA();
+
+  Serial.println(F("The UID tag is:"));
+  Serial.print(F("In hex: "));
+  printHex(rfid.uid.uidByte, rfid.uid.size);
+  Serial.println("");
+  Serial.print("UID_Str: ");
+  Serial.println(UID_Str);
+  Serial.println();
+
+  char buf[5];
+  UID_Str.toCharArray(buf, UID_Str.length() + 1);
+
+  u8x8.clear();
+  u8x8.drawString(5, line1, "ID:");
+  u8x8.drawString(0, line2, buf);
+  lastupdate = millis();
+  updatescreen = true;
+}
+
+/**
+   Helper routine to dump a byte array as hex values to Serial.
+*/
+void printHex(byte *buffer, byte bufferSize) {
+  UID_Str = "";
+  for (byte i = 0; i < bufferSize; i++) {
+    Serial.print(buffer[i] < 0x10 ? " 0" : " ");
+    Serial.print(buffer[i], HEX);
+    if (buffer[i] < 0x10)
+      UID_Str += String(0, HEX);
+    UID_Str += String(buffer[i], HEX);
+  }
+  UID_Str.toUpperCase();  // all letters as capitals
+}
